@@ -1,6 +1,8 @@
 /* C compiler: symbol table management */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define HASHSIZE 119            /* hash table size */
 
@@ -14,7 +16,7 @@ static struct string {          /* string table */
 char *alloc(n)
 int n;
 {
-        char *s, *malloc();
+        char *s;
 
         if ((s = malloc(n)) == NULL) {
                 fprintf(stderr, "compiler error: storage overflow\n");
@@ -31,7 +33,7 @@ char *str;
 int flag;
 {
         register int h, len;
-        char *s, *strcpy();
+        char *s;
         register struct string *p;
 
         h = 0;

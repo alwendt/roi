@@ -3,6 +3,7 @@
 /*  alan@ezlink.com */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 #include <string.h>
 #define nelts(array) (sizeof(array) / sizeof(array[0]))
@@ -13,24 +14,22 @@
 #define	MAXACCTS	200
 #define MAXSTKS		200
 
-extern char	*alloc(), *calloc();
+extern char	*alloc();
 extern char	*slookup();
 extern char	*ncv();
-extern char	*strchr();
-extern char	*strrchr();
-extern long	strtol();
 static double	est(), brent();
 extern char	*daytostr();
-extern double	fabs();
-extern double	floor();
 static double	cashflow();
 static int acct_index(), acct_date(), stock_alpha(), acctyear_year();
 
 static double avg();
-static double estimated_price();
+static double estimated_price() __attribute__((unused));
 static void	annual_performance();
 static void postbalance();
 static double simple_return_pct();
+static void stop();
+static void addprice();
+static void atomize();
 
 char		daystr[10];
 int		debug;
@@ -158,7 +157,7 @@ int getacct(stock,acct)
     }
 
 /*  Here's a newer price for this stock.  Link it at the head of the chain */
-addprice(date, stk, price)
+static void addprice(date, stk, price)
     long	date;
     int		stk;
     float	price;
@@ -171,7 +170,7 @@ addprice(date, stk, price)
     newprice->price = price;
     }
 
-stop(msg)
+static void stop(msg)
     char *msg;
     {
     fprintf(stderr, "%s\n", msg);
@@ -233,7 +232,7 @@ long strtoday(dd)
     maxd[2] = 28;
     if ((!(YEAR & 3) && (YEAR % 100)) || !(YEAR % 400)) 
 	maxd[2] = 29;
-    if (MONTH < 1 || MONTH > 12 || DAY < 1 || DAY > maxd[MONTH]) return -1;
+    if (MONTH < 1 || MONTH > 12 || DAY < 1 || DAY > (int)maxd[MONTH]) return -1;
 
     m = (MONTH <= 2) ? -1 : 0;
     YEAR += m;
@@ -251,7 +250,7 @@ long strtoday(dd)
 
 extern double atof();
 
-atomize(s, atoms)
+static void atomize(s, atoms)
     char	*s, **atoms;
     {
     int		i;
@@ -292,7 +291,7 @@ static enum linetype decode(name)
     if (name[0] == '#')
 	return COMMENT;
 
-    for (i = 0; i < nelts(names); i++) {
+    for (i = 0; i < (int)nelts(names); i++) {
 	if (!strcmp(names[i], name)) {
 	    return (enum linetype)i;
             }
@@ -302,7 +301,7 @@ static enum linetype decode(name)
 
 static     double	totbal;
 
-main(ac, av)
+int main(ac, av)
     int		ac;
     char	*av[];
     {
@@ -311,7 +310,6 @@ main(ac, av)
     int		i, j, lineno = 0, acct, stk;
     long	period_end = 1000000000;
     double	soldshares;
-    double	t;
 
     if (ac == 2 && !strcmp(av[1], "--help")) {
         printf("-d  debug\n");
@@ -374,7 +372,6 @@ main(ac, av)
 			    accts[acct].shares != UNKNOWN &&
 			    CURRPRICE(stk) != UNKNOWN) {
 
-			    double	balance = accts[acct].balance;
                             double      price = atof(fields[4]) / atof(fields[3]);
 			    addprice(today, stk, price);
 			    accts[acct].enddate = today;
@@ -392,6 +389,7 @@ main(ac, av)
 		 *  goes down by the amount of the dividend, but the
 		 *  total account balance stays the same.
 		 */
+		/* FALLTHROUGH */
 		case DIV:	/* div	cbu	0.05 */
 		stk = getstk(fields[1]);
 
@@ -422,6 +420,16 @@ main(ac, av)
 		break;
 
 		case COMMENT:
+		break;
+
+		case YIELD:
+		case NOTE:
+		case STCG:
+		case LTCG:
+		case EARNINGS:
+		case DIVIDENDS:
+		case PTER:
+		case PTBR:
 		break;
 
 		case WHAT:
@@ -1116,10 +1124,10 @@ char *daytostr(djd)
     m = m + 2L - 12L * l;
     y = 100L* (n-49L) + y + l;
     if (1900L <= y && y <=1999L)
-	sprintf(buffer, "%2u/%+02u/%+02u", (unsigned)m,
+	sprintf(buffer, "%2u/%02u/%02u", (unsigned)m,
 	    (unsigned)d, (unsigned)(y-1900));
     else
-	sprintf(buffer, "%2u/%+02u/%+04u", (unsigned)m,
+	sprintf(buffer, "%2u/%02u/%04u", (unsigned)m,
 	    (unsigned)d, (unsigned)y);
     return buffer;
     }
@@ -1192,7 +1200,7 @@ static double brent(int lb, int ub)
     {
     int		iter;
     double	a, b;		/* upper and lower bounds */
-    double	c, d, e, min1, min2;
+    double	c = 0.0, d = 0.0, e = 0.0, min1, min2;
     double	fa, fb, fc, p, q, r, s, tol1, xm;
 
     /*  get initial upper bound by doubling the estimate	*/
@@ -1457,9 +1465,8 @@ static void postbalance(acct)
     {
     char	bf[20];
     int		year, day;
-    int		i, j;
+    int		i;
     char	*s;
-    double	total;
 
     strcpy(bf, daytostr((double)today));
     s = strrchr(bf, '/');
