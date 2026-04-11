@@ -1,0 +1,1649 @@
+# To unbundle, sh this file
+echo unbundling README 1>&2
+cat >README <<'AlBeRtEiNsTeIn'
+roi is a program that reads a file of prices and stock transactions.
+It reports return-on-investment, current balances, stock prices, and 39-week
+moving averages.  See the file testdata.in to get an idea of the format.
+
+Alan Wendt
+AlBeRtEiNsTeIn
+echo unbundling roi.1 1>&2
+cat >roi.1 <<'AlBeRtEiNsTeIn'
+.TH ROI 1L "Local" "ALW" \" -*- nroff -*-
+.SH NAME
+roi \- print investment results
+.SH SYNOPSIS
+.B roi
+[\-f] [file...]
+.SH DESCRIPTION
+.B roi
+reads the files (or standard input) and 
+prints a summary of investment results.
+For each account, it displays the stock symbol, account name (an
+arbitrary disambiguator such as ira, std, 403b, or whatever),
+the average compound return on the investment,
+the current value of the account, the current price of the stock,
+the 39-week average stock price, and the stock's percentage representation
+in the total portfolio.
+The overall portfolio performance is summarized, giving total
+portfolio value and cumulative return.
+
+.SH INPUT FORMAT
+.B roi
+processes files containing transactions separated by newlines.
+Within each transaction, fields are separated by
+tab characters.
+The following transactions are processed:
+
+.PP
+date     \fIyymmdd\fP
+.pp
+
+The \fIdate\fP transaction consists of the word \fIdate\fP, a tab character,
+the date (year first, then month, then day), and a newline.
+It supplies a date during which subsequent activity took place.
+All transactions consists of tab-separated fields terminated by newlines.
+
+.PP
+price     \fIstockname\fP   \fIprice\fP
+.PP
+
+The \fIprice\fP transaction consists of the word \fIprice\fP,
+a stock symbol (like \fIibm\fP), and a price (like \fI49.95\fP).
+Prices can be recorded for stocks, mututal funds, commodities,
+stock indeces, etc., regardless of whether they can be purchased and sold.
+
+.PP
+buy       \fIstockname\fP   \fIacctname\fP    \fIshares\fP    \fIamount\fP
+.PP
+
+The \fIbuy\fP transaction consists of the word \fIbuy\fP,
+a stock name, an arbitrary account name (like \fIira\fP, \fI403b\fP, or \fIstd\fP),
+the number of shares purchased, and the total dollar cost including
+commisions and loads.
+
+.PP
+sell       \fIstockname\fP   \fIacctname\fP    \fIshares\fP    \fIamount\fP
+.PP
+
+The \fIsell\fP transaction consists of the word \fIsell\fP,
+a stock name, an account name, the number of shares purchased,
+and the total dollar return after commisions and loads have been paid.
+
+.PP
+bal       \fIstockname\fP   \fIacctname\fP    \fIshares\fP    \fIamount\fP
+.PP
+
+The \fIbal\fP transaction consists of the word \fIbal\fP,
+a stock name, an account name, the number of shares currently owned,
+and the total dollar worth including commisions and loads.
+The \fIbal\fP transaction sets the account balance and stock price, to
+handle dividends and other events.
+
+.PP
+charge     \fIstockname\fP    \fIacctname\fP    \fIamount\fP
+.PP
+
+The \fIcharge\fP transaction reports a holding charge that you paid
+on the account.
+For example, an annual IRA account fee would be reported using this
+transaction.
+
+.PP
+div       \fIstockname\fP    \fIacctname\fP    \fIamount\fP
+.PP
+
+The \fIdiv\fP transaction reports a dividend that you received 
+on the account.
+Dividends taken in stock are not currently processed and
+the bal command must be used to adjust the share and dollar
+amounts held in the account.
+
+Other transactions include: \fIyield\fP, \fIstcg\fP, \fIltcg\fP,
+\fIearns\fP, \fIdivs\fP, \fIp/e\fP, and \fPp/b\fP.
+These transactions are not currently processed in any meaningful way,
+but can be used to document the stock's yield, dividends, and other data.
+
+.SH BUGS
+\fIroi\fP does not correct for dividends and splits when calculating
+39-week average price.
+
+\"counts the number of bytes, whitespace-separated words, and newlines
+\"in each given file, or the standard input if none are given or when a
+\"file named `\-' is given.  It prints one line of counts for each file,
+\"and if the file was given as an argument, it prints the filename
+\"following the counts.  If more than one filename is given,
+\".B wc
+\"prints a final line containing the cumulative counts, with the
+\"filename `total'.  The counts are printed in the order: lines, words,
+\"bytes.
+\".PP
+\"By default,
+\".B wc
+\"prints all three counts.  Options can specify that only certain counts
+\"be printed.  Options do not undo others previously given, so
+\".BI wc " \-\-bytes \-\-words"
+\"prints both the byte counts and the word counts.
+\".SS OPTIONS
+\".TP
+\".I "\-c, \-\-bytes, \-\-chars"
+\"Print only the byte counts.
+\".TP
+\".I "\-w, \-\-words"
+\"Print only the word counts.
+\".TP
+\".I "\-l, \-\-lines"
+\"Print only the newline counts.
+\".TP
+\".I "\-\-help"
+\"Print a usage message and exit with a non-zero status.
+\".TP
+\".I "\-\-version"
+\"Print version information on standard error then exit.
+
+AlBeRtEiNsTeIn
+echo unbundling roi.c 1>&2
+cat >roi.c <<'AlBeRtEiNsTeIn'
+/*  rate of return of a portfolio	*/
+/*  Alan L. Wendt */
+/*  alan@ezlink.com */
+
+#include <stdio.h>
+#define nelts(array) (sizeof(array) / sizeof(array[0]))
+
+#define UNKNOWN		-1.23456e18
+
+#define	MAXTRANS	1000
+#define	MAXACCTS	50
+#define MAXSTKS		50
+
+extern char	*alloc(), *calloc();
+extern char	*slookup();
+extern char	*ncv();
+extern char	*strchr();
+extern char	*strrchr();
+extern long	strtol();
+static double	est(), brent();
+extern char	*daytostr();
+extern double	fabs();
+extern double	floor();
+static int acct_index(), acct_date(), stock_alpha(), yearend_year();
+
+static double avg();
+static double estimated_price();
+static void	annual_performance();
+
+char		daystr[10];
+int		debug;
+int		showflows;
+int		use_brent;
+long		today;
+
+#define CURRPRICE(stk) (stocks[stk].prices ?stocks[stk].prices->price : UNKNOWN)
+
+/*	cash flows */
+struct Trans {
+    double	deposit;	/* amount */
+    long	date;		/* date of transaction */
+    int		acct;		/* account index number */
+    char	fake;		/* I'm a fake transaction */
+    } trans[MAXTRANS];
+
+/*	accounts (ie magellan ira account) */
+struct Acct {
+    char	*name;		/* e.g. "ira" */
+    int		stkix;		/* index into stknames */
+    int		firsttrans;	/* 1st trans in deposits */
+    long	enddate;	/* last balance date */
+    float	shares;		/* current share balance */
+    double	balance;	/* current dollar balance */
+    } accts[MAXACCTS];
+
+/*	stocks (ie magellan) */
+struct Stock {
+    char	*name;		/* e.g. "mag" */
+    struct Price *prices;	/* list of all prices encountered */
+    int		listed;		/* listed as an account */
+    } stocks[MAXSTKS];
+
+struct Price {			/* historical prices */
+    long	date;		/* in reverse order */
+    float	price;
+    struct Price *prev;
+    };
+
+/*  This records the dollar balance of each acct at the end of the
+ *  year, or as close to it as the data goes.  It's used to print
+ *  the annual performance summary.
+ */
+struct YearEnd {
+    short	year;		/* 1994 */
+    short	day;		/* 1 to 366 */
+    double	balance;
+    short	acct;
+    } yearend[MAXACCTS*10];
+
+int		nyears;		/* # of YearEnd structures used */
+char		*filenames[50];
+int		nfiles, naccts, nstks, ntrans;
+long		maxday = 0;	/* largest date encountered */
+long		minday = 2000000000;	/* smallest date encountered */
+char		*stock;
+int		trace_est;
+
+/*  indexes into accts to sort it alphabetically */
+short		sorted_accts[MAXACCTS];
+
+/* strtoday string into day number */
+
+
+static unsigned maxd[] = {
+    0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    };
+
+int getstk(stock)
+    char	*stock;
+    {
+    int		stkno;
+    stock = slookup(stock, 1);
+    if (nstks > MAXSTKS) stop("too many stocks\n");
+
+    stocks[nstks].name = stock;
+    for (stkno = 0; stocks[stkno].name != stock; stkno++)
+	;
+    if (stkno == nstks) {
+	stocks[stkno].prices = NULL;
+	nstks++;
+	}
+    return stkno;
+    }
+
+int getacct(stock,acct)			/* look up an account number */
+    char	*stock, *acct;
+    {
+    int		stkno, acctno;
+
+    stock = slookup(stock, 1);
+    acct = slookup(acct, 1);
+
+    stkno = getstk(stock);
+
+    if (naccts == MAXACCTS) stop("too many accts\n");
+    accts[naccts].name = acct;
+    accts[naccts].stkix = stkno;
+
+    for (acctno = 0; accts[acctno].name != acct || accts[acctno].stkix != stkno;
+	acctno++)
+	;
+
+    if (acctno == naccts) naccts++;
+    return acctno;
+    }
+
+/*  Here's a newer price for this stock.  Link it at the head of the chain */
+addprice(date, stk, price)
+    long	date;
+    int		stk;
+    float	price;
+    {
+    struct Price *newprice;
+    newprice = (struct Price *)alloc(sizeof(struct Price));
+    newprice->prev = stocks[stk].prices;
+    stocks[stk].prices = newprice;
+    newprice->date = date;
+    newprice->price = price;
+    }
+
+stop(msg)
+    char *msg;
+    {
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+    }
+
+static double dexp(d, exp)
+    double d;
+    register long exp;
+    {
+    static double result;
+
+
+    result = 1.0;	    /* init multiplicative acc */
+
+    if (exp < 0)	    /* exponent negative? */
+	{
+	d = 1/d;
+	exp = -exp;
+	}
+
+    while (exp != 0) {
+	if (exp & 1) result *= d;   /* fold this factor */
+	exp >>= 1;	    /* shift exponent */
+	d *= d;     /* square running multiplier */
+	}
+
+    return result;
+    }
+
+#define YEAR (n[0])
+#define MONTH (n[1])
+#define DAY (n[2])
+
+/*  convert "YYMMDD" into # of days using Jan 1, 1601 = day 1
+ *  ref: CACM 11, 657 (1968) - valid back to 24 Nov -4713
+ */
+long strtoday(dd)
+    char *dd;
+    {
+    char		*ddend;
+    int			c;
+    long		jdn;
+    int			n[3];
+    static int		m;
+
+    jdn = strtol(dd, &ddend, 10);		/* convert mmddyy */
+
+    if (*ddend) return -1;
+
+    for (c = 2; c >= 0; c--) {
+	n[c] = jdn % 100;
+	jdn /= 100;
+	}
+
+    if (YEAR <= 99) YEAR += 1900;	/* correct for c */
+    maxd[2] = 28;
+    if ((!(YEAR & 3) && (YEAR % 100)) || !(YEAR % 400)) 
+	maxd[2] = 29;
+    if (MONTH < 1 || MONTH > 12 || DAY < 1 || DAY > maxd[MONTH]) return -1;
+
+    m = (MONTH <= 2) ? -1 : 0;
+    YEAR += m;
+    jdn = (long)DAY - 2337888L;
+    jdn += 1461L * ((long)YEAR + 4800L) / 4L;
+    jdn += 367L * (MONTH - 2L - (long)m * 12L) / 12L;
+    jdn -= 3L * (((long)YEAR + 4900L) / 100L) / 4L;
+
+    return jdn;
+    }
+
+#define LO 0
+#define MID 1
+#define HI 2
+
+extern double atof();
+
+atomize(s, atoms)
+    char	*s, **atoms;
+    {
+    int		i;
+    char	*t;
+
+    for (i = 0;;) {
+	atoms[i++] = s;
+	t = strchr(s, '\t');
+	if (t) {
+	    *t = 0;
+	    s = t + 1;
+	    }
+	else {
+	    atoms[i] = 0;
+	    return;
+	    }
+	}
+    }
+
+#if 0
+earns	djia	133.05		/* earnings */
+divs	djia	70.06		/* dividends */
+p/e	djia	15.1		/* price to earnings ratio */
+p/b	djia	2.0427		/* price to book ratio */
+#endif
+
+char	*names[] = {
+	"price", "date", "bal", "buy", "sell", "yield", "div",
+	"what", "charge", "note", "stcg", "ltcg", "earns", "divs",
+	"p/e", "p/b"
+	};
+
+static enum linetype { PRICE,DATETY,BAL,BUY,SELL,YIELD,DIV,WHAT,CHARGE,NOTE,STCG,LTCG, EARNINGS, DIVIDENDS, PTER, PTBR, COMMENT } type;
+static enum linetype decode(name)
+    char	*name;
+    {
+    int		i;
+    if (name[0] == '#')
+	return COMMENT;
+
+    for (i = 0; i < nelts(names); i++) {
+	if (!strcmp(names[i], name))
+	    return (enum linetype)i;
+	}
+    return WHAT;
+    }
+
+main(ac, av)
+    int		ac;
+    char	*av[];
+    {
+    FILE	*f;
+    char	bf[200], *fields[20];
+    int		i, j, lineno = 0, acct, stk;
+    long	period_end = 1000000000;
+    double	soldshares;
+    double	totbal;
+    double	t;
+
+    /*
+    trans = (struct Trans *)calloc(sizeof(struct Trans), MAXTRANS);
+    */
+
+    for (i = 1; i < ac; i++) {
+	if (av[i][0] == '-' && av[i][1] == 's') stock = av[i]+2;
+	else if (!strcmp(av[i], "-d")) debug = 1;
+	else if (!strcmp(av[i], "-f")) showflows = 1;
+	else if (!strcmp(av[i], "-e")) trace_est = 1;
+	else if (!strcmp(av[i], "-b")) use_brent = 1;
+	else if (av[i][0] == '-' && av[i][1] == 'p') {
+	    period_end = strtoday(av[i] + 2);
+	    printf("period-end = %ld\n", period_end);
+	    }
+	else filenames[nfiles++] = av[i];
+	}
+
+    if (nfiles == 0) {
+	filenames[nfiles++] = "-";
+	}
+
+    for (i = 0; i < nfiles; i++) {	/* read in all the info		*/
+
+	if (!strcmp(filenames[i], "-")) f = stdin;
+	else f = fopen(filenames[i], "r");
+	if (f == NULL) {
+	    fprintf(stderr, "can't open %s\n", filenames[i]);
+	    continue;
+	    }
+
+	while (fgets(bf, sizeof(bf), f)) {
+	    lineno++;
+	    bf[strlen(bf)-1] = 0;	/* blast newline */
+	    if (strlen(bf) == 0) continue;
+	    atomize(bf, fields);
+
+	    type = decode(fields[0]);
+
+	    switch (type) {
+
+		/*  What happens in a dividend is that the price
+		 *  goes down by the amount of the dividend, but the
+		 *  total account balance stays the same.
+		 */
+		case DIV:	/* div	cbu	0.05 */
+		stk = getstk(fields[1]);
+
+		/*  update accts holding this stock */
+		if (debug)
+		    printf("%s div %s %.2f\n",
+			daystr, fields[1], atof(fields[2]));
+
+		for (acct = 0; acct < naccts; acct++) {
+		    if (accts[acct].stkix == stk &&
+			accts[acct].balance != UNKNOWN &&
+			accts[acct].shares != UNKNOWN &&
+			CURRPRICE(stk) != UNKNOWN) {
+
+			double	balance = accts[acct].balance;
+			addprice(today, stk, CURRPRICE(stk) - atof(fields[2]));
+			accts[acct].enddate = today;
+
+			accts[acct].shares = balance / CURRPRICE(stk);
+			accts[acct].balance = balance;
+			if (debug && accts[acct].balance != 0.0)
+			    printf("      acct %s shares %s bal %.2f\n",
+			    accts[acct].name, ncv(accts[acct].shares), accts[acct].balance);
+			postbalance(acct);
+			}
+		    }
+
+		break;
+
+		case COMMENT:
+		break;
+
+		case WHAT:
+		fprintf(stderr, "unknown transaction line %d\n",  lineno);
+		break;
+
+		case DATETY:
+		today = strtoday(fields[1]);
+		if (today == -1) {
+		    fprintf(stderr, "bad date at line %d\n", lineno);
+		    exit(1);
+		    }
+		strcpy(daystr, fields[1]);
+		if (today >= period_end)
+		    goto done;
+		if (today < minday)
+		    minday = today;
+		if (maxday < today)
+		    maxday = today;
+		else
+		    fprintf(stderr, "backward date at line %d\n", lineno);
+		break;
+	
+
+
+		case PRICE: /*  price	cbu	11.31 */
+
+		stk = getstk(fields[1]);		/* remember price */
+		addprice(today, stk, atof(fields[2]));
+
+		/*  update accts holding this stock */
+		if (debug)
+		    printf("%s price %s %.2f\n", daystr, fields[1], CURRPRICE(stk));
+		for (acct = 0; acct < naccts; acct++) {
+		    if (accts[acct].stkix == stk) {
+			if (accts[acct].shares != UNKNOWN)
+			    accts[acct].balance = accts[acct].shares * CURRPRICE(stk);
+			accts[acct].enddate = today;
+			if (debug && accts[acct].balance != 0.0)
+			    printf("      acct %s shares %s bal %.2f\n",
+			    accts[acct].name, ncv(accts[acct].shares), accts[acct].balance);
+			postbalance(acct);
+			}
+		    }
+
+		break;
+
+
+		case SELL: /* sell	cbu	std	100	1119.47 */
+
+
+		acct = getacct(fields[1], fields[2]);
+		stk = accts[acct].stkix;
+
+		if (strcmp(fields[3], "?")) soldshares = atof(fields[3]);
+		else if (CURRPRICE(stk) != UNKNOWN)
+		    soldshares = atof(fields[4]) / CURRPRICE(stk);
+		else soldshares = UNKNOWN;
+
+		if (accts[acct].shares != UNKNOWN && soldshares != UNKNOWN) {
+		    accts[acct].shares -= soldshares;
+		    }
+		else accts[acct].shares = UNKNOWN;
+
+		if (strcmp(fields[3], "?")) {
+		    addprice(today, stk, atof(fields[4]) / atof(fields[3]));
+		    }
+
+		if (ntrans >= MAXTRANS) {
+		    fprintf(stderr, "too many transactions\n");
+		    exit(1);
+		    }
+
+		trans[ntrans].deposit = -atof(fields[4]);
+		trans[ntrans].fake = 0;
+		if (accts[acct].shares == 0) accts[acct].balance = 0.0;
+		if (accts[acct].shares != UNKNOWN && CURRPRICE(stk) != UNKNOWN)
+		    accts[acct].balance = accts[acct].shares * CURRPRICE(stk);
+
+		if (debug) {
+		    printf("%s sell %s %s price %s ",
+			daystr, fields[1], fields[2], ncv(CURRPRICE(stk)));
+		    printf("%s shares worth ", ncv(soldshares));
+		    printf("$%s ", ncv(atof(fields[4])));
+		    printf("%s remain worth ", ncv(accts[acct].shares));
+		    printf("$%s\n", ncv(accts[acct].balance));
+		    }
+		trans[ntrans].date = today;
+		trans[ntrans].acct = acct;
+		ntrans++;
+		postbalance(acct);
+		break;
+
+		/* This is like a charge that you pay that
+		 * doesn't buy you any additional shares.
+		 */
+		case CHARGE: /* charge	cbu	std	10.00	*/
+		acct = getacct(fields[1], fields[2]);
+		if (debug)
+		    printf("%s charge %s %s %.2f\n",
+			daystr, fields[1], fields[2], atof(fields[3]));
+
+		if (ntrans >= MAXTRANS) {
+		    fprintf(stderr, "too many transactions\n");
+		    exit(1);
+		    }
+		trans[ntrans].deposit = atof(fields[3]);
+		trans[ntrans].date = today;
+		trans[ntrans].acct = acct;
+		trans[ntrans].fake = 0;
+		ntrans++;
+		postbalance(acct);
+		break;
+
+		case BUY: /* buy	cbu	std	100	1119.47	*/
+
+		acct = getacct(fields[1], fields[2]);
+		stk = accts[acct].stkix;
+
+		if (accts[acct].shares != UNKNOWN) {
+		    if (strcmp(fields[3], "?"))
+			accts[acct].shares += atof(fields[3]);
+		    else if (CURRPRICE(stk) != UNKNOWN)
+			accts[acct].shares += atof(fields[4]) / CURRPRICE(stk);
+		    else
+			accts[acct].shares = UNKNOWN;
+		    }
+
+		if (strcmp(fields[3], "?"))
+		    addprice(today, stk, atof(fields[4]) / atof(fields[3]));
+
+		if (ntrans >= MAXTRANS) {
+		    fprintf(stderr, "too many transactions\n");
+		    exit(1);
+		    }
+		trans[ntrans].fake = 0;
+		trans[ntrans].deposit = atof(fields[4]);
+
+		if (accts[acct].shares == 0) accts[acct].balance = 0.0;
+		if (accts[acct].shares != UNKNOWN && CURRPRICE(stk) != UNKNOWN)
+		    accts[acct].balance = accts[acct].shares * CURRPRICE(stk);
+
+		if (debug)
+		    printf("%s buy  %s %s price %.2f shares %s bal %.2f\n",
+			daystr, fields[1], fields[2], CURRPRICE(stk),
+			ncv(accts[acct].shares), accts[acct].balance);
+		trans[ntrans].date = today;
+		trans[ntrans].acct = acct;
+		ntrans++;
+		postbalance(acct);
+		break;
+
+		case BAL: /* bal	bac	std	100	862.50	*/
+
+		acct = getacct(fields[1], fields[2]);
+		stk = accts[acct].stkix;
+
+		if (strcmp(fields[3], "?")) accts[acct].shares = atof(fields[3]);
+		else if (CURRPRICE(stk) != UNKNOWN && fields[4]) {
+		    accts[acct].shares = atof(fields[4]) / CURRPRICE(stk);
+		    }
+		else accts[acct].shares = UNKNOWN;
+
+		if (accts[acct].shares != UNKNOWN && accts[acct].shares != 0.0) {
+		    addprice(today, stk, atof(fields[4]) / accts[acct].shares);
+		    }
+
+		if (fields[4])
+		    accts[acct].balance = atof(fields[4]);
+		else
+		    accts[acct].balance = accts[acct].shares * CURRPRICE(stk);
+
+		if (debug)
+		    printf("%s bal %s %s price %.2f shares %s bal %.2f\n",
+			    daystr, fields[1], fields[2], CURRPRICE(stk),
+			    ncv(accts[acct].shares), accts[acct].balance);
+		accts[acct].enddate = today;
+		postbalance(acct);
+		break;
+		}
+	    }
+	done:
+	fclose(f);
+	}
+
+    accts[nfiles].firsttrans = ntrans;		/* remember last element */
+
+    /*  Fake up a withdrawl on the last balance date of each account so that
+     *  the cash flow will look like we got all of our money out.
+     */
+    totbal = 0;
+    for (acct = 0; acct < naccts; acct++) {	/* for each account	*/
+	stk = accts[acct].stkix;
+	if (accts[acct].balance) {
+	    if (ntrans >= MAXTRANS) {
+		fprintf(stderr, "too many transactions\n");
+		exit(1);
+		}
+
+	    /*	The following line dumps core under Xenix 2.3.4 286 */
+	    trans[ntrans].deposit = -accts[acct].balance;
+	    trans[ntrans].date = accts[acct].enddate;
+	    trans[ntrans].acct = acct;
+	    trans[ntrans].fake = 1;
+	    totbal += accts[acct].balance;
+	    ntrans++;
+	    }
+	}
+
+    /*  Sort the cash flow records into account order */
+    qsort(trans, ntrans, sizeof(trans[0]), acct_index);
+
+    /*  Record the first transaction index in each account */
+    accts[trans[ntrans - 1].acct + 1].firsttrans = ntrans;
+    for (i = ntrans - 1; i >= 0; i--)
+	accts[trans[i].acct].firsttrans = i;
+
+    printf("   stock     acct     roi       price     shares      balance  39-week\n");
+
+
+    for (acct = 0; acct < naccts; acct++)
+	sorted_accts[acct] = acct;
+    
+    /*  get a list of accounts sorted alphabetically */
+    qsort(sorted_accts, naccts, sizeof(sorted_accts[0]), stock_alpha);
+
+    for (j = 0; j < naccts; j++) {
+	acct = sorted_accts[j];
+	stk = accts[acct].stkix;
+	stocks[stk].listed = 1;
+
+	/*
+	printf("For acct %d first %d last %d\n",
+		acct,
+		accts[acct].firsttrans,
+		accts[acct + 1].firsttrans - 1);
+	*/
+
+	if (showflows) {
+	    printf("Cash flows for %s %s:\n",
+		stocks[stk].name, accts[acct].name);
+
+	    for (i = accts[acct].firsttrans;
+		i < accts[acct + 1].firsttrans; i++) {
+		printf("%s\t% 9.4f\n",
+		    daytostr((double)trans[i].date), trans[i].deposit);
+		}
+	    }
+
+	printf("%8.8s ", stocks[stk].name);
+	printf("%8.8s: ", accts[acct].name);
+	printf("% 9.4f", use_brent ? brent(acct) : est(acct));
+	printf("%9.2f  ", stocks[stk].prices->price);
+	if (accts[acct].shares)
+	    printf("%9.2f  ", (double)accts[acct].shares);
+	else
+	    printf("           ");
+	if (accts[acct].balance)
+	    printf("% 11.2f", (double)accts[acct].balance);
+	else
+	    printf("           ");
+	printf("%9.2f", avg(stocks[stk].prices, 39 * 7));
+	if (accts[acct].balance) {
+	    printf("  %4.0f%%", accts[acct].balance / totbal * 100.0);
+	    }
+	printf("\n");
+	}
+
+    /*	Now list prices and 39-week averages for stocks that we have
+     *  records for that we did not report as part of an account.
+     */
+    for (stk = 0; stk < nstks; stk++) {
+	if (!stocks[stk].listed) {
+	    printf("%8.8s         :          ", stocks[stk].name);
+	    printf("%9.2f                        %9.2f",
+		stocks[stk].prices->price, avg(stocks[stk].prices, 39 * 7));
+	    printf("\n");
+	    }
+	}
+
+    if (naccts)
+	printf("            total: % 9.4f                      %11.2f\n",
+	    use_brent ? brent(-1) : est(-1), totbal);
+
+    annual_performance();
+
+    exit(0);
+    }
+
+/*  for each year in this file
+ *      add up end of year balances for each account
+ *  show:  balances at end of year
+ *         investment returns in dollars
+ *         new investing in dollars
+ *         rate of investment return for the year.
+ */
+static void annual_performance()
+    {
+    int		i;
+    double	previous = 0;
+    double	balances;
+    int		acct, j;
+    double	deposits;
+    double	totdeposits = 0, totreturns = 0;
+
+    /*  index # of next chronological cash flow record */
+    int		nextcash = 0;
+
+    printf("\n\nYear   Deposits    Investment       Balance      Gain\n");
+    printf("                     Return\n\n");
+
+    /*  sort the end-of-year balances into date order */
+    qsort(yearend, nyears, sizeof(yearend[0]), yearend_year);
+
+    /*  Delete the fake transactions */
+    for (i = 0; i < ntrans; i++) {
+	if (trans[i].fake)
+	    trans[i--] = trans[--ntrans];
+	}
+
+    /*  Sort the cash flow records into date order */
+    qsort(trans, ntrans, sizeof(trans[0]), acct_date);
+
+    for (i = 0; i < nyears; i++) {
+
+	/*  Is i the last year-end-balance record for some year? */
+	if (i == nyears - 1 || yearend[i].year != yearend[i + 1].year) {
+
+	    /*  Add up the deposits made in yearend[i].year */
+	    deposits = 0;
+
+	    for (; nextcash < ntrans; nextcash++) {
+		char	bf[20];
+		int		year;
+		char	*s;
+		strcpy(bf, daytostr((double)trans[nextcash].date));
+		s = strrchr(bf, '/');
+		year = strtol(s + 1, (char **)NULL, 10);
+		if (year != yearend[i].year)
+		    break;
+		deposits += trans[nextcash].deposit;
+		}
+
+	    /*  Add up the most recent balance for each acct prior to
+	     *  the end of that year.
+	     */
+	    balances = 0;
+
+	    for (acct = 0; acct < naccts; acct++) {
+		/*  Find most recent yearend record for this acct */
+		for (j = i; j >= 0; j--) {
+		    if (yearend[j].acct == acct) {
+			balances += yearend[j].balance;
+			break;
+			}
+		    }
+		}
+
+#if 0
+	    printf("year %d date %d %s %s deposits %.2f bal %.2f\n",
+		yearend[i].year,
+		yearend[i].day,
+		accts[yearend[i].acct].name,
+		stocks[accts[yearend[i].acct].stkix].name,
+		deposits,
+		yearend[i].balance);
+#endif
+	    if (previous != 0.0)
+		printf("%4d %10.2f    %10.2f    %10.2f %10.2f%%\n",
+		    yearend[i].year, deposits,
+		    balances - previous - deposits, balances,
+		    balances / previous * 100.0 - 100.0);
+	    else 
+		printf("%4d %10.2f    %10.2f    %10.2f         \n",
+		    yearend[i].year, deposits,
+		    balances - previous - deposits, balances);
+	    totdeposits += deposits;
+	    totreturns += balances - previous - deposits;
+	    previous = balances;
+	    }
+	}
+    printf("     %10.2f    %10.2f\n",
+	totdeposits, totreturns);
+    }
+
+/*  Add up all of the cash flows, plus interest at the given rate */
+double cashflow(acct, rate)
+    int		acct;
+    double	rate;
+    {
+    int		lb, ub, i;
+    double	result;
+
+    if (acct == -1) {
+	lb = 0;
+	ub = ntrans;
+	}
+    else {
+	lb = accts[acct].firsttrans;
+	ub = accts[acct + 1].firsttrans;
+	}
+
+    /*  Calculate the total cashflow for this rate */
+    result = 0;
+    for (i = lb; i < ub; i++) {
+	if (trans[i].date == 0)
+	    return 0;
+	result += (trans[i].deposit * dexp(rate, maxday - trans[i].date));
+	}
+    return result;
+    }
+
+/*  Estimate rate of return on investment by binary and linear search */
+static double est(acct)
+    int		acct;
+    {
+    int		which;
+    double	guess[3], tot[3];
+
+
+    /*  get initial upper bound by doubling the estimate	*/
+    /*  We have to start off with good bounds because we may	*/
+    /*  be raising them to very large exponents.		*/
+    guess[HI] = 1.0000001;	/* lower bound on the upper bound	*/
+    do	{
+	guess[HI] = 1.0 + 2.0 * (guess[HI] - 1.0);
+	tot[HI] = cashflow(acct, guess[HI]);
+	} while (tot[HI] < 0.0);
+
+    /*  get initial lower bound			*/
+    guess[LO] = guess[HI];
+    do	{
+	guess[LO] *= 0.99;
+	tot[LO] = cashflow(acct, guess[LO]);
+	} while (0 < tot[LO]);
+
+    if (tot[LO] == tot[HI])
+	return 0.0;
+
+    /*  Uses alternating linear (secant) and bisection search steps because
+     *  secant sometimes blows up on negative interest rates.  I have never
+     *  seen more than 12 pairs of steps needed to drive the accuracy to
+     *  machine precision.  The loop breaks when the machine's arithmetic does.
+     */
+    for (;;) {
+
+
+	/* Guess the rate that will yield zero total cashflow (secant) */
+	guess[MID] = guess[LO] + (guess[HI] - guess[LO]) *
+			-tot[LO] / (tot[HI] - tot[LO]);
+
+	if (trace_est)
+	    printf("LINEAR: LOW %.8g MID %.8g HI %.8g INT %.8g\n",
+		(double)guess[LO], (double)guess[MID],
+		(double)guess[HI], (double)guess[HI] - (double)guess[LO]);
+
+	tot[MID] = cashflow(acct, guess[MID]);
+
+	which = (0 < tot[MID]) ? HI : LO;
+
+	if (guess[LO] >= guess[HI] /* || guess[which] == guess[MID] */)
+	    goto gotrate;
+
+	guess[which] = guess[MID];
+	tot[which] = tot[MID];
+
+	/* special step */
+	if (which == LO)
+	    guess[MID] = guess[LO] + (guess[HI] - guess[LO]) / 10.0;
+	else
+	    guess[MID] = guess[HI] - (guess[HI] - guess[LO]) / 10.0;
+
+	if (trace_est)
+	    printf("SPCIAL: LOW %.8g MID %.8g HI %.8g INT %.8g\n",
+		(double)guess[LO], (double)guess[MID],
+		(double)guess[HI], (double)guess[HI] - (double)guess[LO]);
+
+	/*  Calculate the total cashflow for this rate */
+	tot[MID] = cashflow(acct, guess[MID]);
+
+	which = (0 < tot[MID]) ? HI : LO;
+
+	if (guess[LO] >= guess[HI] /* || guess[which] == guess[MID] */)
+	    goto gotrate;
+
+	guess[which] = guess[MID];
+	tot[which] = tot[MID];
+
+	/* Bisection step */
+	guess[MID] = (guess[HI] + guess[LO]) / 2;
+
+	if (trace_est)
+	    printf("BISECT: LOW %.8g MID %.8g HI %.8g INT %.8g\n",
+		(double)guess[LO], (double)guess[MID],
+		(double)guess[HI], (double)guess[HI] - (double)guess[LO]);
+
+	tot[MID] = cashflow(acct, guess[MID]);
+
+	which = (0 < tot[MID]) ? HI : LO;
+
+	if (guess[LO] >= guess[HI] || guess[which] == guess[MID]) break;
+
+	guess[which] = guess[MID];
+	tot[which] = tot[MID];
+	}
+
+    gotrate:
+    guess[MID] = 100.0 * (dexp(guess[MID], (long)365) - 1.0);
+    return guess[MID];
+    }
+
+char *ncv(d)
+    double d;
+    {
+    static char bf[50];
+    if (d == UNKNOWN) return "?";
+    sprintf(bf, "%.2f", d);
+    return bf;
+    }
+
+#define DAYBUFL 11
+
+/* Convert day number to string */
+char *daytostr(djd)
+    double djd;
+    {
+    long	jd, l, n, y, m, d;
+    static char buffer[DAYBUFL];		/* date conversion buffer */
+
+    if (djd == UNKNOWN) return "?";
+    jd = djd;				/* integer version */
+
+    l = jd + 2374382L;
+    n = 4L*l / 146097L;
+    l = l - (146097L*n + 3L)/4L;
+    y = 4000L* (l+1L) / 1461001L;
+    l = l-1461L * y / 4L +31L;
+    m = 80L * l / 2447L;
+    d = l - 2447L * m /80L;
+    l = m /11L;
+    m = m + 2L - 12L * l;
+    y = 100L* (n-49L) + y + l;
+    if (1900L <= y && y <=1999L)
+	sprintf(buffer, "%2u/%+02u/%+02u", (unsigned)m,
+	    (unsigned)d, (unsigned)(y-1900));
+    else
+	sprintf(buffer, "%2u/%+02u/%+04u", (unsigned)m,
+	    (unsigned)d, (unsigned)y);
+    return buffer;
+    }
+
+/*  Compare two transactions to sort them into date order. */
+static int acct_date(l,r)
+    struct Trans *l, *r;
+    {
+    if (l->date < r->date) return -1;
+    if (l->date > r->date) return 1;
+    if (l->acct < r->acct) return -1;
+    if (l->acct > r->acct) return 1;
+    return 0;
+    }
+
+static int yearend_year(l, r)
+    struct YearEnd *l, *r;
+    {
+    if (l->year < r->year)
+	return -1;
+    if (l->year > r->year)
+	return 1;
+    return 0;
+    }
+
+/*  Compare two transactions to sort them into account order and bring
+ *  transactions for the same accounts into a tight sequence.
+ */
+static int acct_index(l,r)
+    struct Trans *l, *r;
+    {
+    if (l->acct < r->acct) return -1;
+    if (l->acct > r->acct) return 1;
+    if (l->date < r->date) return -1;
+    if (l->date > r->date) return 1;
+    return 0;
+    }
+
+/*  Compare accounts to generate a list of accounts sorted alphabetically */
+static int stock_alpha(l,r)
+    short	*l, *r;
+    {
+    int		cmp;
+
+    cmp = strcmp(stocks[accts[*l].stkix].name,
+		 stocks[accts[*r].stkix].name);
+    if (cmp < 0)
+	return -1;
+    if (cmp > 0)
+	return 1;
+
+    cmp = strcmp(accts[*l].name, accts[*r].name);
+
+    if (cmp < 0)
+	return -1;
+    if (cmp > 0)
+	return 1;
+
+    return 0;
+    }
+
+#define EPS 3.0e-16
+
+/*  From Numeric Algorithms in C */
+static double brent(acct)
+    {
+    int		iter;
+    double	a, b;		/* upper and lower bounds */
+    double	c, d, e, min1, min2;
+    double	fa, fb, fc, p, q, r, s, tol1, xm;
+
+    /*  get initial upper bound by doubling the estimate	*/
+    /*  We have to start off with good bounds because we may	*/
+    /*  be raising them to very large exponents.		*/
+    a = 1.0000001;	/* lower bound on the upper bound	*/
+    do	{
+	a = 1.0 + 2.0 * (a - 1.0);
+	fa = cashflow(acct, a);
+	} while (fa <= 0.0);
+
+    /*  get initial lower bound			*/
+    b = a;
+    do	{
+	b *= 0.99;
+	fb = cashflow(acct, b);
+	} while (0 <= fb);
+
+    if (fb * fa > 0.0) {
+	fprintf(stderr, "Root must be bracketed in ZBRENT\n");
+	exit(-1);
+	}
+    
+    fc = fb;
+
+    /*  f(a) & f(b) bracket the root and c is between a & b */
+
+    for (iter = 1; iter < 100; iter++) {
+
+	if (fb * fc > 0.0) {		/* b & c on same side */
+	    c = a;			/* use a & b */
+	    fc = fa;			/* now b & c are limits */
+	    e = d = b - a;
+	    }
+
+	if (fabs(fc) < fabs(fb)) {	/* if c is closer to root */
+	    a = b;			/* use */
+	    b = c;
+	    c = a;
+	    fa = fb;
+	    fb = fc;
+	    fc = fa;
+	    }
+
+	tol1 = 2.0 * EPS * fabs(b);
+	xm = 0.5 * (c - b);
+
+	if (fabs(xm) <= tol1 || fb == 0.0) {
+	    /* fprintf(stderr, "xm %.8g tol1 %.8g fb %.8g\n", xm, tol1, fb); */
+	    return 100.0 * (dexp(b, (long)365) - 1.0);
+	    }
+
+	if (fabs(e) >= tol1 && fabs(fa) > fabs(fb)) {
+	    s = fb / fa;
+	    if (a == c) {
+		p = 2.0 * xm * s;
+		q = 1.0 - s;
+		}
+	    else {
+		q = fa / fc;
+		r = fb / fc;
+		p = s * (2.0 * xm * q * (q - r) - (b - a) * (r - 1.0));
+		q = (q - 1.0) * (r - 1.0) * (s - 1.0);
+		}
+	    if (p > 0.0)
+		q = -q;
+	    p = fabs(p);
+	    min1 = 3.0 * xm * q - fabs(tol1 * q);
+	    min2 = fabs(e * q);
+	    if (2.0 * p < (min1 < min2 ? min1 : min2)) {
+		e = d;
+		d = p / q;
+		if (trace_est)
+		    printf("INTERP: b=%.8g e=%.8g\n", b, e);
+		}
+	    else {
+		d = xm;
+		e = d;
+		if (trace_est)
+		    printf("BISECT: b=%.8g e=%.8g\n", b, e);
+		}
+	    }
+	else {
+	    d = xm;
+	    e = d;
+	    if (trace_est)
+		printf("BISECT: b=%.8g e=%.8g\n", b, e);
+	    }
+
+	a = b;
+	fa = fb;
+	if (fabs(d) > tol1)
+	    b += d;
+	else
+	    b += (xm > 0.0) ? fabs(tol1) : -fabs(tol1);
+	fb = cashflow(acct, b);
+	if (trace_est)
+	    printf("fb=%.10g\n", fb);
+	}
+
+    fprintf(stderr, "Maximum number of iterations exceeded in ZBRENT\n");
+    exit(-1);
+    }
+
+/*  Estimate the price of this stock on this given date. */
+static double estimated_price(latestprice, date)
+    struct Price *latestprice;
+    long	date;
+    {
+    struct Price *current;	/* current Price record */
+    struct Price *prev;		/* previous (next on list, prior datewise) */
+
+    for (current = latestprice;; current = prev) {
+	prev = current->prev;
+
+	/*  found exactly the date we want? */
+	if (current->date == date)
+	    return current->price;
+
+	/*  is prev <= date < current? */
+	if (prev && prev->date <= date && date < current->date) {
+	    /*  return prev price + change per day * # of days */
+	    return prev->price +
+		(current->price - prev->price) / (current->date - prev->date) *
+		(date - prev->date);
+	    }
+
+	/*  no more dates before this one? */
+	if (!prev) {
+	    return current->price;
+	    }
+	}
+    }
+
+
+/*  N-day moving average.  Interpolates around missing weekday prices.
+ *  Saturdays and Sundays are ignored except for the purpose of counting
+ *  days -- a 39-week moving average is 39*7 days.
+ *
+ *  There are a few problematic cases.  If the earliest listed price
+ *  might not be early enough, in which case we will have to settle for
+ *  less than 39 weeks, won't we?  It might be too early, in which case
+ *  the routine interpolates to get the date and price to begin the
+ *  39-week period with.
+ */
+#define trace_avg 0
+static double avg(latestprice, days)
+    struct Price *latestprice;
+    int		days;
+    {
+    struct Price *current;	/* current Price record */
+
+    struct Price *prev;		/* next earlier record */
+    long	prevdate;	/* date in prev record */
+
+    long	date0;		/* date immediately before period */
+    double	price0;		/* corresponding price */
+
+    int		weekdays;
+    double	totaldays = 0, totalprices = 0;
+    long	d;
+    double	delta;		/* per-day delta */
+
+#if trace_avg
+    printf("avg from %ld to %ld inclusive\n",
+	latestprice->date - days + 1, latestprice->date);
+#endif
+
+    /*  Get the previous n-day avg price of this stock.  Ignores dividends. */
+    for (current = latestprice;; current = prev) {
+
+	/*  The previous date for which we have a price */
+	prev = current->prev;
+
+	/*  If there is no previous date, use current date - 1 */
+	prevdate = (prev == NULL) ? current->date - 1 : prev->date;
+
+#if trace_avg
+	if (prev)
+	    printf("previous date %ld price %.2f\n",
+		(long)prev->date, prev->price);
+	else printf("end of list, using prevdate=%ld\n", prevdate);
+#endif
+
+	/*  if the previous date was before the period started, get the
+	 *  first date in the period.
+	 */
+	date0 = prevdate;
+	if (date0 < latestprice->date - days) {
+	    date0 = latestprice->date - days;
+#if trace_avg
+	    printf("preceeds beginning of period, using %ld\n", date0);
+#endif
+	    if (prev) {
+		delta = (double)(current->price - prev->price) /
+					(current->date - prev->date);
+		price0 = prev->price + (date0 - prev->date) * delta;
+#if trace_avg
+		printf(
+		"previous rec [%ld,%.4f] delta %.4f virtual [%ld,%.4f]\n",
+		    prevdate, prev->price,
+		    delta,
+		    date0, price0);
+#endif
+		}
+	    else {
+		delta = price0 = 0;
+#if trace_avg
+		printf("No previous record\n");
+#endif
+		}
+	    }
+
+	/*  Get # of weekdays in the interval (date0, current] */
+	weekdays = 0;
+	for (d = date0 + 1; d <= current->date; d++)
+	    if (1 <= d % 7 && d % 7 <= 5)
+		weekdays++;
+
+#if trace_avg
+	printf("date0 %ld current->date %ld weekdays %d\n",
+	    date0, current->date, weekdays);
+#endif
+
+	/*  Get sum of all of the linearly scaled prices from
+	 *  date0 + 1 to date.
+	 *  the two dates. date = upper date, date0 = lower date.
+	 *  sum from i=1 to date - date0
+	 *  (Price(date0) + i * (Price(date) - Price(date0)) /
+	 *					     (date - date0))
+	 *  Average of first & last = (first + last) / 2
+	 *  Desired sum = (weekdays + 1) * average - first
+	 */
+	if (weekdays == 1)
+	    totalprices += current->price;
+	else if (weekdays > 0) {
+	    delta = (double)(current->price - prev->price) /
+				(current->date - prev->date);
+	    price0 = prev->price + (date0 - prev->date) * delta;
+	    totalprices +=
+		(weekdays + 1.0) * (price0 + current->price) / 2.0 - price0;
+	    }
+
+	totaldays += weekdays;
+	if (!prev || prev->date <= latestprice->date - days)
+	    break;
+	}
+
+    return totalprices / totaldays;
+    }
+
+
+/*  Figure out what day it is and how much money I have.  Add the figure
+ *  to the appropriate YearEnd structure, if it's closer to the end of
+ *  the year than currently posted.
+ */
+postbalance(acct)
+    int		acct;
+    {
+    char	bf[20];
+    int		year, day;
+    int		i, j;
+    char	*s;
+    double	total;
+
+    strcpy(bf, daytostr((double)today));
+    s = strrchr(bf, '/');
+    year = strtol(s + 1, (char **)NULL, 10);
+    sprintf(bf, "%02d0101", year);
+    day = floor(1.5 + today - strtoday(bf));
+    /*
+    printf("string %s year %d day %d date %s\n",
+	bf, year, day, daytostr((double)today));
+    */
+    for (i = 0; i < nyears; i++) {
+	if (yearend[i].year == year && yearend[i].acct == acct) {
+	    if (yearend[i].day <= day) {
+		yearend[i].balance = accts[acct].balance;
+		yearend[i].day = day;
+		}
+	    return;
+	    }
+	}
+
+    yearend[nyears].year = year;
+    yearend[nyears].day = day;
+    yearend[nyears].acct = acct;
+    yearend[nyears].balance = accts[acct].balance;
+    nyears++;
+    }
+
+#if 0
+struct YearEnd {
+    short	year;		/* 1994 */
+    short	day;		/* 1 to 366 */
+    double	balance;
+    } yearend[100];
+#endif
+AlBeRtEiNsTeIn
+echo unbundling slookup.c 1>&2
+cat >slookup.c <<'AlBeRtEiNsTeIn'
+/* C compiler: symbol table management */
+
+#include <stdio.h>
+
+#define HASHSIZE 119            /* hash table size */
+
+static struct string {          /* string table */
+        char *str;              /* string */
+        struct string *next;    /* next entry */
+} *stab[HASHSIZE];
+
+
+/* alloc - allocate n bytes of storage or die */
+char *alloc(n)
+int n;
+{
+        char *s, *malloc();
+
+        if ((s = malloc(n)) == NULL) {
+                fprintf(stderr, "compiler error: storage overflow\n");
+                exit(1);
+                }
+        return (s);
+}
+
+
+
+/* slookup - lookup str, install if flag is non-zero, return pointer */
+char *slookup(str, flag)
+char *str;
+int flag;
+{
+        register int h, len;
+        char *s, *strcpy();
+        register struct string *p;
+
+        h = 0;
+        for (s = str, len = 0; *s; len++)
+                h += *s++;
+        for (p = stab[h%HASHSIZE]; p; p = p->next)
+                if (strcmp(str, p->str) == 0)
+                        return (p->str);
+        if (flag) {
+                p = (struct string *) alloc(sizeof(struct string));
+                p->str = strcpy(alloc(len + 1), str);
+                p->next = stab[h%HASHSIZE];
+                stab[h%HASHSIZE] = p;
+                return (p->str);
+                }
+        return (NULL);
+}
+AlBeRtEiNsTeIn
+echo unbundling testdata.in 1>&2
+cat >testdata.in <<'AlBeRtEiNsTeIn'
+date	910716
+buy	exbt	std	100	1773.00
+date	910718
+price	exbt	16.25
+date	910719
+price	exbt	17.00
+date	910722
+price	exbt	17.25
+date	910803
+price	exbt	18.50
+date	910805
+price	exbt	18.750
+date	910806
+price	exbt	19.375
+date	910807
+price	exbt	19.125
+date	910808
+price	exbt	19.375
+date	910809
+price	exbt	19.125
+date	910812
+price	exbt	19.750
+date	910813
+price	exbt	19.625
+date	910814
+price	exbt	20.25
+date	910827
+price	exbt	20.50
+date	910828
+price	exbt	20.75
+date	910904
+price	exbt	20.875
+date	910906
+price	exbt	21.25
+date	910909
+price	exbt	21.375
+date	910910
+price	exbt	20.00
+date	910912
+price	exbt	21.75
+date	910917
+price	exbt	21.75
+date	910919
+price	exbt	22.375
+date	910920
+price	exbt	22.875
+date	910923
+price	exbt	25.125
+date	910927
+price	exbt	25.250
+date	910930
+price	exbt	25.125
+date	911007
+price	exbt	23.00
+date	911008
+price	exbt	25.00
+date	911009
+price	exbt	25.50
+date	911010
+price	exbt	24.875
+date	911011
+price	exbt	24.875
+date	911014
+price	exbt	25.25
+date	911015
+price	exbt	25.50
+date	911021
+price	exbt	25.875
+date	911022
+price	exbt	26.875
+date	911023
+sell	exbt	std	100	2664.50
+bal	exbt	std	0	0
+date	911024
+price	exbt	26.75
+date	911126
+price	exbt	24.25
+date	911209
+price	exbt	26.50
+date	911218
+price	exbt	25.375
+date	920109
+price	exbt	34.875
+date	920203
+price	exbt	36.00
+date	920228
+price	exbt	39.125
+date	920410
+price	exbt	38.125
+date	920512
+price	exbt	34.25
+date	920519
+price	exbt	33.25
+date	920709
+price	exbt	29.375
+date	920713
+price	exbt	29.75
+date	920722
+price	exbt	27.625
+date	920729
+price	exbt	30.75
+date	920825
+price	exbt	23.50
+date	930823
+buy	azco	std	400	1156.34
+bal	azco	std	400	1108.00
+date	930825
+price	azco	3.10
+date	930827
+price	azco	2.86
+date	930830
+price	azco	2.69
+date	930831
+price	azco	2.75
+date	930901
+price	azco	2.69
+date	930902
+price	azco	2.74
+date	930908
+price	azco	2.90
+date	930909
+price	azco	2.85
+date	930910
+price	azco	2.83
+date	930913
+price	azco	2.78
+date	930914
+price	azco	2.67
+date	930916
+price	azco	2.53
+date	930917
+price	azco	2.00
+date	930921
+price	azco	1.93
+date	930923
+price	azco	2.36
+date	930928
+price	azco	2.76
+date	931001
+price	azco	2.59
+date	931004
+price	azco	2.54
+date	931006
+price	azco	2.52
+date	931007
+price	azco	2.58
+date	931011
+price	azco	2.55
+date	931012
+price	azco	2.77
+date	931013
+price	azco	2.77
+date	931014
+AlBeRtEiNsTeIn
+echo unbundling testdata.out 1>&2
+cat >testdata.out <<'AlBeRtEiNsTeIn'
+   stock     acct     roi       price     shares      balance  39-week
+    azco      std:  -26.3335     2.77     400.00      1108.00     2.64   100%
+    exbt      std:  348.9860    23.50                            32.88
+            total:  338.5681                          1108.00
+
+
+Year   Deposits    Investment       Balance      Gain
+                     Return
+
+  91    -891.50        891.50          0.00         
+  92       0.00          0.00          0.00         
+  93    1156.34        -48.34       1108.00         
+         264.84        843.16
+AlBeRtEiNsTeIn

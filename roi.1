@@ -1,0 +1,132 @@
+.TH ROI 1L "Local" "ALW" \" -*- nroff -*-
+.SH NAME
+roi \- print investment results
+.SH SYNOPSIS
+.B roi
+[\-f] [file...]
+.SH DESCRIPTION
+.B roi
+reads the files (or standard input) and 
+prints a summary of investment results.
+For each account, it displays the stock symbol, account name (an
+arbitrary disambiguator such as ira, std, 403b, or whatever),
+the average compound return on the investment,
+the current value of the account, the current price of the stock,
+the 39-week average stock price, and the stock's percentage representation
+in the total portfolio.
+The overall portfolio performance is summarized, giving total
+portfolio value and cumulative return.
+
+.SH INPUT FORMAT
+.B roi
+processes files containing transactions separated by newlines.
+Within each transaction, fields are separated by
+tab characters.
+The following transactions are processed:
+
+.PP
+date     \fIyymmdd\fP
+.pp
+
+The \fIdate\fP transaction consists of the word \fIdate\fP, a tab character,
+the date (year first, then month, then day), and a newline.
+It supplies a date during which subsequent activity took place.
+All transactions consists of tab-separated fields terminated by newlines.
+
+.PP
+price     \fIstockname\fP   \fIprice\fP
+.PP
+
+The \fIprice\fP transaction consists of the word \fIprice\fP,
+a stock symbol (like \fIibm\fP), and a price (like \fI49.95\fP).
+Prices can be recorded for stocks, mututal funds, commodities,
+stock indeces, etc., regardless of whether they can be purchased and sold.
+
+.PP
+buy       \fIstockname\fP   \fIacctname\fP    \fIshares\fP    \fIamount\fP
+.PP
+
+The \fIbuy\fP transaction consists of the word \fIbuy\fP,
+a stock name, an arbitrary account name (like \fIira\fP, \fI403b\fP, or \fIstd\fP),
+the number of shares purchased, and the total dollar cost including
+commisions and loads.
+
+.PP
+sell       \fIstockname\fP   \fIacctname\fP    \fIshares\fP    \fIamount\fP
+.PP
+
+The \fIsell\fP transaction consists of the word \fIsell\fP,
+a stock name, an account name, the number of shares purchased,
+and the total dollar return after commisions and loads have been paid.
+
+.PP
+bal       \fIstockname\fP   \fIacctname\fP    \fIshares\fP    \fIamount\fP
+.PP
+
+The \fIbal\fP transaction consists of the word \fIbal\fP,
+a stock name, an account name, the number of shares currently owned,
+and the total dollar worth including commisions and loads.
+The \fIbal\fP transaction sets the account balance and stock price, to
+handle dividends and other events.
+
+.PP
+charge     \fIstockname\fP    \fIacctname\fP    \fIamount\fP
+.PP
+
+The \fIcharge\fP transaction reports a holding charge that you paid
+on the account.
+For example, an annual IRA account fee would be reported using this
+transaction.
+
+.PP
+div       \fIstockname\fP    \fIacctname\fP    \fIamount\fP
+.PP
+
+The \fIdiv\fP transaction reports a dividend that you received 
+on the account.
+Dividends taken in stock are not currently processed and
+the bal command must be used to adjust the share and dollar
+amounts held in the account.
+
+Other transactions include: \fIyield\fP, \fIstcg\fP, \fIltcg\fP,
+\fIearns\fP, \fIdivs\fP, \fIp/e\fP, and \fPp/b\fP.
+These transactions are not currently processed in any meaningful way,
+but can be used to document the stock's yield, dividends, and other data.
+
+.SH BUGS
+\fIroi\fP does not correct for dividends and splits when calculating
+39-week average price.
+
+\"counts the number of bytes, whitespace-separated words, and newlines
+\"in each given file, or the standard input if none are given or when a
+\"file named `\-' is given.  It prints one line of counts for each file,
+\"and if the file was given as an argument, it prints the filename
+\"following the counts.  If more than one filename is given,
+\".B wc
+\"prints a final line containing the cumulative counts, with the
+\"filename `total'.  The counts are printed in the order: lines, words,
+\"bytes.
+\".PP
+\"By default,
+\".B wc
+\"prints all three counts.  Options can specify that only certain counts
+\"be printed.  Options do not undo others previously given, so
+\".BI wc " \-\-bytes \-\-words"
+\"prints both the byte counts and the word counts.
+\".SS OPTIONS
+\".TP
+\".I "\-c, \-\-bytes, \-\-chars"
+\"Print only the byte counts.
+\".TP
+\".I "\-w, \-\-words"
+\"Print only the word counts.
+\".TP
+\".I "\-l, \-\-lines"
+\"Print only the newline counts.
+\".TP
+\".I "\-\-help"
+\"Print a usage message and exit with a non-zero status.
+\".TP
+\".I "\-\-version"
+\"Print version information on standard error then exit.
+
