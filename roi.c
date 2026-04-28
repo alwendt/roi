@@ -102,6 +102,7 @@ long		maxday = 0;	/* largest date encountered */
 long		minday = 2000000000;	/* smallest date encountered */
 char		*stock;
 int		trace_est;
+int		last_date_has_traffic;
 
 /*  indexes into accts to sort it alphabetically */
 short		sorted_accts[MAXACCTS];
@@ -443,6 +444,7 @@ int main(ac, av)
 		    exit(1);
 		    }
 		strcpy(daystr, fields[1]);
+		last_date_has_traffic = 0;
 		if (today > period_end)
 		    goto done;
 		if (today < minday)
@@ -480,6 +482,7 @@ int main(ac, av)
 
 		case SELL: /* sell	cbu	std	100	1119.47 */
 
+		last_date_has_traffic = 1;
 
 		acct = getacct(fields[1], fields[2]);
 		stk = accts[acct].stkix;
@@ -532,6 +535,7 @@ int main(ac, av)
 		 * doesn't buy you any additional shares.
 		 */
 		case CHARGE: /* charge	cbu	std	10.00	*/
+		last_date_has_traffic = 1;
 		acct = getacct(fields[1], fields[2]);
 		if (debug)
 		    printf("%s charge %s %s %.2f\n",
@@ -551,6 +555,7 @@ int main(ac, av)
 
 		case BUY: /* buy	cbu	std	100	1119.47	*/
 
+		last_date_has_traffic = 1;
 		acct = getacct(fields[1], fields[2]);
 		stk = accts[acct].stkix;
 
@@ -829,6 +834,7 @@ static void annual_performance()
 
 		trans[ntrans].deposit = -years[nyears].balance;
 		trans[ntrans].date = years[nyears].enddate;
+		trans[ntrans].acct = naccts;
 		trans[ntrans].fake = 1;
 		ntrans++;
 		/* } */
@@ -852,7 +858,7 @@ static void annual_performance()
     /*  All the fakes got December 31 dates, but this is
      *  wrong for the partial last year.
      */
-    trans[ntrans - 1].date = today;
+    trans[ntrans - 1].date = today + (last_date_has_traffic ? 1 : 0);
 
     /*  Sort the cash flow records (including the fakes) into date order */
     qsort(trans, ntrans, sizeof(trans[0]), acct_date);
@@ -1140,10 +1146,10 @@ static int acct_date(l,r)
     {
     if (l->date < r->date) return -1;
     if (l->date > r->date) return 1;
-    if (l->acct < r->acct) return -1;
-    if (l->acct > r->acct) return 1;
     if (l->fake > r->fake) return 1;
     if (l->fake < r->fake) return -1;
+    if (l->acct < r->acct) return -1;
+    if (l->acct > r->acct) return 1;
     return 0;
     }
 
