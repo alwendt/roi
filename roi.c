@@ -27,9 +27,10 @@ static double estimated_price() __attribute__((unused));
 static void	annual_performance();
 static void postbalance();
 static double simple_return_pct();
+static int zero_period_window();
 static void stop();
 static void addprice();
-static void atomize();
+static int atomize();
 
 char		daystr[10];
 int		debug;
@@ -251,7 +252,7 @@ long strtoday(dd)
 
 extern double atof();
 
-static void atomize(s, atoms)
+static int atomize(s, atoms)
     char	*s, **atoms;
     {
     int		i;
@@ -266,7 +267,7 @@ static void atomize(s, atoms)
 	    }
 	else {
 	    atoms[i] = 0;
-	    return;
+	    return i;
 	    }
 	}
     }
@@ -308,7 +309,7 @@ int main(ac, av)
     {
     FILE	*f;
     char	bf[200], *fields[20];
-    int		i, j, lineno = 0, acct, stk;
+    int		i, j, lineno = 0, acct, stk, nfields;
     long	period_end = 1000000000;
     double	soldshares;
 
@@ -355,7 +356,7 @@ int main(ac, av)
 	    lineno++;
 	    bf[strlen(bf)-1] = 0;	/* blast newline */
 	    if (strlen(bf) == 0) continue;
-	    atomize(bf, fields);
+	    nfields = atomize(bf, fields);
 
 	    type = decode(fields[0]);
 
@@ -364,6 +365,11 @@ int main(ac, av)
                 /*  div security account shares dollars */
                 /*  account declared a dividend and posted it into the account */
                 case DIV2:
+                    if (nfields < 5) {
+                        fprintf(stderr, "bad div2 at line %d: expected 5 fields, got %d\n",
+                            lineno, nfields);
+                        break;
+                        }
                     stk = getstk(fields[1]); 
 
                     /* update accounts holding this stock */
@@ -392,6 +398,11 @@ int main(ac, av)
 		 */
 		/* FALLTHROUGH */
 		case DIV:	/* div	cbu	0.05 */
+		if (nfields < 3) {
+		    fprintf(stderr, "bad div at line %d: expected 3 fields, got %d\n",
+			lineno, nfields);
+		    break;
+		    }
 		stk = getstk(fields[1]);
 
 		/*  update accts holding this stock */
@@ -438,6 +449,11 @@ int main(ac, av)
 		break;
 
 		case DATETY:
+		if (nfields < 2) {
+		    fprintf(stderr, "bad date at line %d: expected 2 fields, got %d\n",
+			lineno, nfields);
+		    break;
+		    }
 		today = strtoday(fields[1]);
 		if (today == -1) {
 		    fprintf(stderr, "bad date at line %d\n", lineno);
@@ -458,6 +474,11 @@ int main(ac, av)
 
 
 		case PRICE: /*  price	cbu	11.31 */
+		if (nfields < 3) {
+		    fprintf(stderr, "bad price at line %d: expected 3 fields, got %d\n",
+			lineno, nfields);
+		    break;
+		    }
 
 		stk = getstk(fields[1]);		/* remember price */
 		addprice(today, stk, atof(fields[2]));
@@ -481,6 +502,11 @@ int main(ac, av)
 
 
 		case SELL: /* sell	cbu	std	100	1119.47 */
+		if (nfields < 5) {
+		    fprintf(stderr, "bad sell at line %d: expected 5 fields, got %d\n",
+			lineno, nfields);
+		    break;
+		    }
 
 		last_date_has_traffic = 1;
 
@@ -535,6 +561,11 @@ int main(ac, av)
 		 * doesn't buy you any additional shares.
 		 */
 		case CHARGE: /* charge	cbu	std	10.00	*/
+		if (nfields < 4) {
+		    fprintf(stderr, "bad charge at line %d: expected 4 fields, got %d\n",
+			lineno, nfields);
+		    break;
+		    }
 		last_date_has_traffic = 1;
 		acct = getacct(fields[1], fields[2]);
 		if (debug)
@@ -554,6 +585,11 @@ int main(ac, av)
 		break;
 
 		case BUY: /* buy	cbu	std	100	1119.47	*/
+		if (nfields < 5) {
+		    fprintf(stderr, "bad buy at line %d: expected 5 fields, got %d\n",
+			lineno, nfields);
+		    break;
+		    }
 
 		last_date_has_traffic = 1;
 		acct = getacct(fields[1], fields[2]);
@@ -599,6 +635,11 @@ int main(ac, av)
 		break;
 
 		case BAL: /* bal	bac	std	100	862.50	*/
+		if (nfields < 4) {
+		    fprintf(stderr, "bad bal at line %d: expected at least 4 fields, got %d\n",
+			lineno, nfields);
+		    break;
+		    }
 
 		acct = getacct(fields[1], fields[2]);
 		stk = accts[acct].stkix;
@@ -631,7 +672,7 @@ int main(ac, av)
 	fclose(f);
 	}
 
-    accts[nfiles].firsttrans = ntrans;		/* remember last element */
+    accts[naccts].firsttrans = ntrans;		/* remember last element */
 
     /*  Fake up a withdrawl on the last balance date of each account so that
      *  the cash flow will look like we got all of our money out.
@@ -996,21 +1037,53 @@ double cashflow(rate, lb, ub, endperiod)
     return result;
     }
 
+/*  If every cash flow lands on the valuation date, the annualized rate
+ *  is indeterminate because no time passes for compounding.
+ */
+static int zero_period_window(lb, ub, endperiod)
+    int		lb;
+    int		ub;
+    long	endperiod;
+    {
+    int		i;
+    long        firstdate;
+
+    if (ub <= lb)
+	return 1;
+
+    firstdate = trans[lb].date;
+    (void)endperiod;
+
+    for (i = lb; i < ub; i++) {
+	if (trans[i].date != firstdate)
+	    return 0;
+	}
+    return 1;
+    }
+
 /*  Estimate rate of return on investment by binary and linear search */
 static double est(int lb, int ub)
     {
     int		which;
     double	guess[3], tot[3];
-    int		i;
+    int		i, iter;
 
+    if (ub <= lb)
+	return 0.0;
+
+    if (zero_period_window(lb, ub, maxday))
+	return 0.0;
 
     /*  get initial upper bound by doubling the estimate	*/
     /*  We have to start off with good bounds because we may	*/
     /*  be raising them to very large exponents.		*/
     guess[HI] = 1.0000001;	/* lower bound on the upper bound	*/
+    i = 0;
     do	{
 	guess[HI] = 1.0 + 2.0 * (guess[HI] - 1.0);
 	tot[HI] = cashflow(guess[HI], lb, ub, maxday);
+        if (++i > 1000)
+            return NAN;
 	} while (tot[HI] < 0.0);
 
     /*  get initial lower bound			*/
@@ -1023,6 +1096,9 @@ static double est(int lb, int ub)
           return NAN;
 	} while (0 < tot[LO]);
 
+    if (!isfinite(tot[LO]) || !isfinite(tot[HI]))
+	return NAN;
+
     if (tot[LO] == tot[HI])
 	return 0.0;
 
@@ -1031,7 +1107,9 @@ static double est(int lb, int ub)
      *  seen more than 12 pairs of steps needed to drive the accuracy to
      *  machine precision.  The loop breaks when the machine's arithmetic does.
      */
-    for (;;) {
+    for (iter = 0;; iter++) {
+        if (iter > 1000)
+            return NAN;
 
 
 	/* Guess the rate that will yield zero total cashflow (secant) */
@@ -1044,6 +1122,8 @@ static double est(int lb, int ub)
 		(double)guess[HI], (double)guess[HI] - (double)guess[LO]);
 
 	tot[MID] = cashflow(guess[MID], lb, ub, maxday);
+        if (!isfinite(tot[MID]))
+            return NAN;
 
 	which = (0 < tot[MID]) ? HI : LO;
 
@@ -1066,6 +1146,8 @@ static double est(int lb, int ub)
 
 	/*  Calculate the total cashflow for this rate */
 	tot[MID] = cashflow(guess[MID], lb, ub, maxday);
+        if (!isfinite(tot[MID]))
+            return NAN;
 
 	which = (0 < tot[MID]) ? HI : LO;
 
@@ -1084,6 +1166,8 @@ static double est(int lb, int ub)
 		(double)guess[HI], (double)guess[HI] - (double)guess[LO]);
 
 	tot[MID] = cashflow(guess[MID], lb, ub, maxday);
+        if (!isfinite(tot[MID]))
+            return NAN;
 
 	which = (0 < tot[MID]) ? HI : LO;
 
@@ -1209,20 +1293,32 @@ static double brent(int lb, int ub)
     double	c = 0.0, d = 0.0, e = 0.0, min1, min2;
     double	fa, fb, fc, p, q, r, s, tol1, xm;
 
+    if (ub <= lb)
+	return 0.0;
+
+    if (zero_period_window(lb, ub, maxday))
+	return 0.0;
+
     /*  get initial upper bound by doubling the estimate	*/
     /*  We have to start off with good bounds because we may	*/
     /*  be raising them to very large exponents.		*/
     a = 1.0000001;	/* lower bound on the upper bound	*/
+    iter = 0;
     do	{
 	a = 1.0 + 2.0 * (a - 1.0);
 	fa = cashflow(a, lb, ub, maxday);
+        if (++iter > 1000)
+            return NAN;
 	} while (fa <= 0.0);
 
     /*  get initial lower bound			*/
     b = a;
+    iter = 0;
     do	{
 	b *= 0.99;
 	fb = cashflow(b, lb, ub, maxday);
+        if (++iter > 1000)
+            return NAN;
 	} while (0 <= fb);
 
     if (fb * fa > 0.0) {
