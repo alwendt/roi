@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <errno.h>
 #define nelts(array) (sizeof(array) / sizeof(array[0]))
 
 #define UNKNOWN		-1.23456e18
@@ -13,6 +14,7 @@
 #define	MAXTRANS	2000
 #define	MAXACCTS	200
 #define MAXSTKS		200
+#define MAXINPUT	50000
 
 extern char	*alloc();
 extern char	*slookup();
@@ -31,11 +33,15 @@ static int zero_period_window();
 static void stop();
 static void addprice();
 static int atomize();
+static void read_input();
+static int input_line_order();
+static char *xstrdup();
 
 char		daystr[10];
 int		debug;
 int		showflows;
 int		use_brent;
+int		input_errors;
 long		today;
 
 #define CURRPRICE(stk) (stocks[stk].prices ?stocks[stk].prices->price : UNKNOWN)
@@ -71,6 +77,18 @@ struct Price {			/* historical prices */
     float	price;
     struct Price *prev;
     };
+
+struct InputLine {
+    long	date;
+    long	seq;
+    int		lineno;
+    int		has_traffic;
+    char	*filename;
+    char	*text;
+    };
+
+struct InputLine input[MAXINPUT];
+int		ninput;
 
 /*  This records the dollar balance of each acct at the end of the
  *  year, or as close to it as the data goes.  It's used to print
@@ -301,13 +319,121 @@ static enum linetype decode(name)
     return WHAT;
     }
 
+static char *xstrdup(s)
+    char	*s;
+    {
+    char	*copy;
+
+    copy = (char *)malloc(strlen(s) + 1);
+    if (!copy)
+	stop("out of memory");
+    strcpy(copy, s);
+    return copy;
+    }
+
+static int input_line_order(a, b)
+    const void	*a, *b;
+    {
+    const struct InputLine *l = (const struct InputLine *)a;
+    const struct InputLine *r = (const struct InputLine *)b;
+
+    if (l->date < r->date)
+	return -1;
+    if (l->date > r->date)
+	return 1;
+    if (l->seq < r->seq)
+	return -1;
+    if (l->seq > r->seq)
+	return 1;
+    return 0;
+    }
+
+static void read_input(period_end)
+    long	period_end;
+    {
+    FILE	*f;
+    char	bf[200], parsebf[200], *fields[20];
+    int		i, lineno, nfields, lastdate;
+    long	date = 0, seq = 0;
+    enum linetype ltype;
+
+    for (i = 0; i < nfiles; i++) {
+	if (!strcmp(filenames[i], "-")) f = stdin;
+	else f = fopen(filenames[i], "r");
+	if (f == NULL) {
+	    fprintf(stderr, "can't open %s\n", filenames[i]);
+	    input_errors++;
+	    continue;
+	    }
+
+	lineno = 0;
+	lastdate = -1;
+	while (fgets(bf, sizeof(bf), f)) {
+	    lineno++;
+	    bf[strlen(bf)-1] = 0;	/* blast newline */
+	    if (strlen(bf) == 0) continue;
+
+	    strcpy(parsebf, bf);
+	    nfields = atomize(parsebf, fields);
+	    ltype = decode(fields[0]);
+
+	    if (ltype == DATETY) {
+		if (nfields < 2) {
+		    fprintf(stderr, "bad date at line %d: expected 2 fields, got %d\n",
+			lineno, nfields);
+		    continue;
+		    }
+		date = strtoday(fields[1]);
+		if (date == -1) {
+		    fprintf(stderr, "bad date at line %d\n", lineno);
+		    exit(1);
+		    }
+		}
+	    else if (ltype != COMMENT && lastdate >= 0) {
+		input[lastdate].has_traffic = 1;
+		}
+
+	    if (date > period_end)
+		continue;
+	    if (ninput >= MAXINPUT)
+		stop("too many input lines");
+
+	    input[ninput].date = date;
+	    input[ninput].seq = seq++;
+	    input[ninput].lineno = lineno;
+	    input[ninput].has_traffic = (ltype != DATETY);
+	    input[ninput].filename = filenames[i];
+	    input[ninput].text = xstrdup(bf);
+	    if (ltype == DATETY)
+		lastdate = ninput;
+	    ninput++;
+	    }
+	if (ferror(f)) {
+	    fprintf(stderr, "can't read %s: %s\n", filenames[i], strerror(errno));
+	    input_errors++;
+	    }
+	if (strcmp(filenames[i], "-"))
+	    fclose(f);
+	}
+
+    for (i = 0; i < ninput; i++) {
+	strcpy(parsebf, input[i].text);
+	nfields = atomize(parsebf, fields);
+	if (decode(fields[0]) == DATETY && !input[i].has_traffic) {
+	    free(input[i].text);
+	    input[i--] = input[--ninput];
+	    }
+	}
+
+    qsort(input, ninput, sizeof(input[0]), input_line_order);
+    }
+
 static     double	totbal;
 
 int main(ac, av)
     int		ac;
     char	*av[];
     {
-    FILE	*f;
     char	bf[200], *fields[20];
     int		i, j, lineno = 0, acct, stk, nfields;
     long	period_end = 1000000000;
@@ -332,6 +458,10 @@ int main(ac, av)
 	else if (!strcmp(av[i], "-f")) showflows = 1;
 	else if (!strcmp(av[i], "-e")) trace_est = 1;
 	else if (!strcmp(av[i], "-b")) use_brent = 1;
+	else if (!strcmp(av[i], "-t") && i + 1 < ac) {
+	    period_end = strtoday(av[++i]);
+	    printf("period-end = %ld\n", period_end);
+	    }
 	else if (av[i][0] == '-' && av[i][1] == 't') {
 	    period_end = strtoday(av[i] + 2);
 	    printf("period-end = %ld\n", period_end);
@@ -343,19 +473,13 @@ int main(ac, av)
 	filenames[nfiles++] = "-";
 	}
 
-    for (i = 0; i < nfiles; i++) {	/* read in all the info		*/
+    read_input(period_end);
+    if (input_errors)
+	exit(1);
 
-	if (!strcmp(filenames[i], "-")) f = stdin;
-	else f = fopen(filenames[i], "r");
-	if (f == NULL) {
-	    fprintf(stderr, "can't open %s\n", filenames[i]);
-	    continue;
-	    }
-
-	while (fgets(bf, sizeof(bf), f)) {
-	    lineno++;
-	    bf[strlen(bf)-1] = 0;	/* blast newline */
-	    if (strlen(bf) == 0) continue;
+    for (i = 0; i < ninput; i++) {	/* process all the info */
+	    strcpy(bf, input[i].text);
+	    lineno = input[i].lineno;
 	    nfields = atomize(bf, fields);
 
 	    type = decode(fields[0]);
@@ -462,12 +586,12 @@ int main(ac, av)
 		strcpy(daystr, fields[1]);
 		last_date_has_traffic = 0;
 		if (today > period_end)
-		    goto done;
+		    goto parsedone;
 		if (today < minday)
 		    minday = today;
 		if (maxday < today)
 		    maxday = today;
-		else
+		else if (today < maxday)
 		    fprintf(stderr, "backward date at line %d\n", lineno);
 		break;
 	
@@ -668,9 +792,7 @@ int main(ac, av)
 		break;
 		}
 	    }
-	done:
-	fclose(f);
-	}
+    parsedone:
 
     accts[naccts].firsttrans = ntrans;		/* remember last element */
 
